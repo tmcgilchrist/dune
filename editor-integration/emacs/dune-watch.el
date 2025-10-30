@@ -2,7 +2,8 @@
 
 ;; Copyright (C) 2021  Kiran Gopinathan
 ;; Author: Kiran Gopinathan <kirang@comp.nus.edu.sg>
-;; Keywords: 
+;; Keywords:
+;; Package-Requires: ((emacs "26.3")) 
 
 ;; This file is not part of GNU Emacs.
 
@@ -48,7 +49,7 @@
 
 (defcustom dune-watch-delete-buffer-on-termination t
   "Whether to delete the dune watch buffer when the dune watch process terminates."
-  :type 'bool
+  :type 'boolean
   :group 'dune-watch)
 
 (defcustom dune-watch-popup-function #'display-buffer-pop-up-window
@@ -58,7 +59,7 @@
 
 (defcustom dune-watch-read-command t
   "Whether the user should be prompted to select a build task."
-  :type 'bool
+  :type 'boolean
   :group 'dune-watch)
 
 ;;;; Constants 
@@ -142,11 +143,11 @@ EVENT is the text output by the sentinel."
   (when dune-watch-buffer
     (display-buffer dune-watch-buffer dune-watch-popup-function)))
 
-(defun dune-watch-filter-function (watch-buffer process event)
+(defun dune-watch-filter-function (watch-buffer _process event)
   "Process filter function used by dune watch.
 
 WATCH-BUFFER is the buffer corresponding to the process.
-PROCESS is the name of the process.
+_PROCESS is the process object (required by filter API, unused).
 EVENT is the string returned by the dune watch."
   (when (and watch-buffer (buffer-live-p watch-buffer))
     (with-current-buffer watch-buffer

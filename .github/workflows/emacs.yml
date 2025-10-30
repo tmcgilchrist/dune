@@ -1,0 +1,208 @@
+name: Emacs Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'editor-integration/emacs/**'
+      - '.github/workflows/emacs.yml'
+  pull_request:
+    paths:
+      - 'editor-integration/emacs/**'
+      - '.github/workflows/emacs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-emacs-mode:
+    name: Test dune-mode (Emacs ${{ matrix.emacs_version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        emacs_version:
+          # Minimum version (same as tuareg-mode, the official OCaml mode)
+          - '26.3'
+          # Emacs versions without tree-sitter
+          - '27.2'
+          - '28.2'
+          # Emacs 29+ with tree-sitter support
+          - '29.1'
+          - '29.4'
+          # Latest stable (Emacs 30.1 released Feb 2025)
+          - '30.1'
+          # Development version
+          - 'snapshot'
+        exclude:
+          # Snapshot can be flaky, only test on ubuntu
+          - os: macos-latest
+            emacs_version: snapshot
+          # Older versions might not build easily on macOS
+          - os: macos-latest
+            emacs_version: '26.3'
+          - os: macos-latest
+            emacs_version: '27.2'
+          - os: macos-latest
+            emacs_version: '28.2'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Emacs
+        uses: jcs090218/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs_version }}
+
+      - name: Verify Emacs installation
+        run: |
+          emacs --version
+          echo "Checking for tree-sitter support..."
+          emacs --batch --eval "(message \"Tree-sitter available: %s\" (and (fboundp 'treesit-available-p) (treesit-available-p)))" 2>&1 || true
+
+      - name: Run tests
+        run: |
+          cd editor-integration/emacs
+          ./run-tests.sh
+
+  test-tree-sitter-mode:
+    name: Test tree-sitter support (Emacs ${{ matrix.emacs_version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs_version:
+          - '29.4'
+          - '30.1'
+          - 'snapshot'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Emacs
+        uses: jcs090218/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs_version }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git
+
+      - name: Verify tree-sitter support
+        run: |
+          emacs --version
+          emacs --batch --eval "(message \"Tree-sitter available: %s\" (and (fboundp 'treesit-available-p) (treesit-available-p)))"
+
+      - name: Install tree-sitter-dune grammar
+        run: |
+          emacs --batch \
+            --eval "(require 'treesit)" \
+            --eval "(add-to-list 'treesit-language-source-alist '(dune . (\"https://github.com/tmcgilchrist/tree-sitter-dune\" \"main\" \"src\")))" \
+            --eval "(unless (treesit-language-available-p 'dune) (treesit-install-language-grammar 'dune))" \
+            --eval "(message \"Dune grammar installed: %s\" (treesit-language-available-p 'dune))" \
+            2>&1 || echo "Warning: Could not install tree-sitter grammar"
+
+      - name: Run tests with tree-sitter enabled
+        run: |
+          cd editor-integration/emacs
+          emacs --batch \
+            -L . \
+            --eval "(setq dune-use-tree-sitter t)" \
+            -l dune.el \
+            -l dune-tests.el \
+            -f ert-run-tests-batch-and-exit
+
+  lint-elisp:
+    name: Lint Emacs Lisp
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Emacs
+        uses: jcs090218/setup-emacs@master
+        with:
+          version: '30.1'
+
+      - name: Install package-lint
+        run: |
+          emacs --batch \
+            --eval "(require 'package)" \
+            --eval "(add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\") t)" \
+            --eval "(package-initialize)" \
+            --eval "(package-refresh-contents)" \
+            --eval "(package-install 'package-lint)"
+
+      - name: Run package-lint
+        run: |
+          cd editor-integration/emacs
+          emacs --batch \
+            --eval "(require 'package)" \
+            --eval "(package-initialize)" \
+            --eval "(require 'package-lint)" \
+            -f package-lint-batch-and-exit dune.el dune-flymake.el dune-watch.el \
+            || echo "Warning: Linting found issues (non-blocking)"
+
+      - name: Check for byte-compilation warnings
+        run: |
+          cd editor-integration/emacs
+          emacs --batch \
+            -L . \
+            --eval "(setq byte-compile-error-on-warn t)" \
+            -f batch-byte-compile dune.el dune-flymake.el dune-watch.el
+
+  test-compatibility:
+    name: Test backward compatibility (Emacs 26.3)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Emacs 26.3 (minimum supported version)
+        uses: jcs090218/setup-emacs@master
+        with:
+          version: '26.3'
+
+      - name: Test that mode works on minimum version
+        run: |
+          cd editor-integration/emacs
+          # Test with dune-use-tree-sitter set to nil (default)
+          emacs --batch \
+            -L . \
+            -l dune.el \
+            --eval "(with-temp-buffer (dune-mode) (unless (eq major-mode 'dune-mode) (error \"Failed to activate dune-mode\")))" \
+            --eval "(message \"dune-mode works on Emacs 26.3: OK\")"
+
+      - name: Test with tree-sitter flag (should gracefully degrade on 26.3)
+        run: |
+          cd editor-integration/emacs
+          # Even with flag enabled, should work on Emacs 26.3 (no tree-sitter)
+          emacs --batch \
+            -L . \
+            --eval "(setq dune-use-tree-sitter t)" \
+            -l dune.el \
+            --eval "(with-temp-buffer (dune-mode) (unless (eq major-mode 'dune-mode) (error \"Failed to activate dune-mode\")))" \
+            --eval "(message \"dune-mode degrades gracefully on 26.3: OK\")"
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-emacs-mode, test-tree-sitter-mode, lint-elisp, test-compatibility]
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          if [[ "${{ needs.test-emacs-mode.result }}" == "success" ]] && \
+             [[ "${{ needs.test-compatibility.result }}" == "success" ]]; then
+            echo "✅ All required tests passed!"
+            exit 0
+          else
+            echo "❌ Some tests failed"
+            exit 1
+          fi

@@ -1,9 +1,10 @@
-;;; dune.el --- Integration with the dune build system
+;;; dune.el --- Integration with the dune build system  -*- lexical-binding: t; -*-
 
 ;; Copyright 2018 Jane Street Group, LLC <opensource@janestreet.com>
 ;;           2017- Christophe Troestler
 ;; URL: https://github.com/ocaml/dune
 ;; Version: 1.0
+;; Package-Requires: ((emacs "26.3"))
 
 ;;; Commentary:
 
@@ -37,6 +38,43 @@
   :tag "Dune build system."
   :version "1.0"
   :group 'languages)
+
+(defcustom dune-use-tree-sitter nil
+  "Use tree-sitter for syntax highlighting and indentation.
+When non-nil, use tree-sitter-dune for parsing, syntax highlighting,
+and indentation instead of the traditional font-lock and SMIE-based
+approach. Requires Emacs 29+ with tree-sitter support."
+  :type 'boolean
+  :group 'dune)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;                    Tree-sitter support
+
+;; Load treesit if available (Emacs 29+)
+(require 'treesit nil t)
+
+(defun dune--tree-sitter-available-p ()
+  "Check if tree-sitter is available in this Emacs."
+  (and (fboundp 'treesit-available-p)
+       (treesit-available-p)))
+
+(defun dune--ensure-tree-sitter-grammar ()
+  "Ensure tree-sitter-dune grammar is installed.
+If not installed, attempt to install it from the GitHub repository."
+  (when (dune--tree-sitter-available-p)
+    (unless (treesit-language-available-p 'dune)
+      (when (yes-or-no-p "Tree-sitter grammar for dune not found. Install it? ")
+        (add-to-list 'treesit-language-source-alist
+                     '(dune . ("https://github.com/tmcgilchrist/tree-sitter-dune"
+                               "main"
+                               "src")))
+        (message "Installing tree-sitter-dune grammar...")
+        (condition-case err
+            (progn
+              (treesit-install-language-grammar 'dune)
+              (message "Tree-sitter-dune grammar installed successfully"))
+          (error
+           (message "Failed to install tree-sitter-dune: %s" err)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;               Syntax highlighting of dune files
@@ -193,14 +231,53 @@
   "Dune syntax table.")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;                Tree-sitter font-lock
+
+(defvar dune--treesit-font-lock-rules
+  '(:language dune
+    :feature comment
+    ((comment) @font-lock-comment-face)
+
+    :language dune
+    :feature string
+    ([(quoted_string) (multiline_string)] @font-lock-string-face)
+
+    :language dune
+    :feature keyword
+    ((stanza_name) @font-lock-keyword-face
+     (action_name) @font-lock-builtin-face)
+
+    :language dune
+    :feature property
+    ((field_name) @font-lock-function-name-face)
+
+    :language dune
+    :feature constant
+    ([(boolean)] @font-lock-constant-face))
+  "Tree-sitter font-lock settings for dune-mode.")
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;                Tree-sitter indentation
+
+(defvar dune--treesit-indent-rules
+  `((dune
+     ((parent-is "source_file") column-0 0)
+     ((node-is ")") parent-bol 0)
+     ((node-is "]") parent-bol 0)
+     ((parent-is "list") parent-bol 1)
+     ((parent-is "stanza") parent-bol 1)
+     ((parent-is "field") parent-bol 1)
+     (no-node parent-bol 1)))
+  "Tree-sitter indentation rules for dune-mode.")
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;                             SMIE
 
 (require 'smie)
 
 (defvar dune-smie-grammar
-  (when (fboundp 'smie-prec2->grammar)
-    (smie-prec2->grammar
-     (smie-bnf->prec2 '()))))
+  (smie-prec2->grammar
+   (smie-bnf->prec2 '())))
 
 (defun dune-smie-rules (kind token)
   "Rules for `smie-setup'.
@@ -386,12 +463,37 @@ See `smie-rules-function' for the meaning of KIND and TOKEN."
 (define-derived-mode dune-mode prog-mode "dune"
   "Major mode to edit dune files.
 For customization purposes, use `dune-mode-hook'."
-  (set (make-local-variable 'font-lock-defaults) '(dune-font-lock-keywords))
   (set (make-local-variable 'comment-start) ";")
   (set (make-local-variable 'comment-end) "")
   (setq indent-tabs-mode nil)
   (set (make-local-variable 'require-final-newline) mode-require-final-newline)
-  (smie-setup dune-smie-grammar #'dune-smie-rules)
+
+  (cond
+   ((and dune-use-tree-sitter
+         (dune--tree-sitter-available-p)
+         (treesit-language-available-p 'dune))
+    (when (treesit-ready-p 'dune)
+      (treesit-parser-create 'dune)
+      (setq-local treesit-font-lock-feature-list
+                  '((comment string)
+                    (keyword property)
+                    (constant)))
+      (setq-local treesit-font-lock-settings
+                  (apply #'treesit-font-lock-rules
+                         dune--treesit-font-lock-rules))
+      (setq-local treesit-simple-indent-rules dune--treesit-indent-rules)
+      (treesit-major-mode-setup)))
+
+   ((and dune-use-tree-sitter
+         (dune--tree-sitter-available-p))
+    (dune--ensure-tree-sitter-grammar)
+    (set (make-local-variable 'font-lock-defaults) '(dune-font-lock-keywords))
+    (smie-setup dune-smie-grammar #'dune-smie-rules))
+
+   (t
+    (set (make-local-variable 'font-lock-defaults) '(dune-font-lock-keywords))
+    (smie-setup dune-smie-grammar #'dune-smie-rules)))
+
   (dune-build-menu))
 
 

@@ -1,8 +1,9 @@
-;;; dune-flymake.el --- Flymake support for dune files   -*- coding: utf-8 -*-
+;;; dune-flymake.el --- Flymake support for dune files   -*- coding: utf-8; lexical-binding: t; -*-
 
 ;; Copyright 2017- Christophe Troestler
 ;; URL: https://github.com/ocaml/dune
 ;; Version: 1.0
+;; Package-Requires: ((emacs "26.3"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -10,6 +11,21 @@
 
 ;; This package complements the dune mode with on the fly tests to
 ;; pinpoint errors.
+;;
+;; NOTE: This uses the legacy Flymake API (flymake-proc) from Emacs 26+.
+;; The Flymake API was redesigned in Emacs 26.1 (May 2018). This code
+;; uses the old API for backward compatibility.
+;;
+;; TODO: Modernize to the new Flymake API
+;; The modern API (introduced in Emacs 26.1) uses flymake-diagnostic-functions
+;; instead of flymake-allowed-file-name-masks and flymake-err-line-patterns.
+;; This would:
+;; - Remove dependency on the legacy flymake-proc module
+;; - Provide better integration with modern Flymake features
+;; - Eliminate byte-compilation warnings about free variables
+;; - Allow multiple diagnostic sources simultaneously
+;;
+;; For reference: https://www.gnu.org/software/emacs/manual/html_mono/flymake.html
 
 ;; Permission to use, copy, modify, and distribute this software for
 ;; any purpose with or without fee is hereby granted, provided that
@@ -25,7 +41,15 @@
 ;; NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 ;; CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+;; Require Emacs 26.1+ for flymake-proc (legacy API)
+;; In Emacs <26, the old API was part of flymake itself
 (require 'flymake)
+(if (require 'flymake-proc nil t)
+    ;; Emacs 26+ with legacy API in flymake-proc
+    nil
+  ;; Emacs <26 - old API is in flymake
+  ;; These variables should already be defined
+  )
 (require 'dune)
 
 ;;; Code:
@@ -56,7 +80,7 @@ characters \\([0-9]+\\)-\\([0-9]+\\): +\\([^\n]*\\)$"
 This is needed as long as https://github.com/ocaml/dune/issues/241
 is not fixed."
   (unless (file-exists-p dune-flymake-program)
-    (let ((dir (file-name-directory dune-program))
+    (let ((dir (file-name-directory dune-flymake-program))
           (pgm "#!/usr/bin/env ocaml
 ;;
 #load \"unix.cma\";;
@@ -109,8 +133,8 @@ let () =
                  errors in
   print_string errors"))
       (make-directory dir t)
-      (append-to-file pgm nil dune-program)
-      (set-file-modes dune-program #o777)
+      (append-to-file pgm nil dune-flymake-program)
+      (set-file-modes dune-flymake-program #o777)
       )))
 
 (defun dune-flymake--temp-name (absolute-path)
@@ -184,13 +208,18 @@ Do not fail on error."
       'flymake-proc-init-create-temp-buffer-copy
     'flymake-init-create-temp-buffer-copy))
 
+(defun dune-flymake-create-temp (file-name prefix)
+  "Create a temporary copy of FILE-NAME with PREFIX in the temp directory.
+This function is used as a callback by flymake's temp buffer copy mechanism."
+  (dune-flymake--temp-name file-name))
+
 (defun dune-flymake-init ()
   "Set up dune-flymake."
   (dune-flymake-create-lint-script)
   (let ((fname (dune-flymake--create-temp-buffer-copy
                 'dune-flymake-create-temp))
         (root (or (dune-flymake--root buffer-file-name) "")))
-    (list dune-program (list fname root))))
+    (list dune-flymake-program (list fname root))))
 
 (defun dune-flymake-dune-mode-hook ()
   "Hook to add to `dune-mode-hook' to enable lint tests."
