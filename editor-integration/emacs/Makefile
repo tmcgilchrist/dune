@@ -50,16 +50,14 @@ compile: $(ELC_FILES)
 # Lint Emacs Lisp files
 lint:
 	@echo "Checking for byte-compilation warnings..."
-	@echo "Note: Ignoring known issues in dune-flymake.el (legacy API - see TODO.md)"
 	@echo "Note: Ignoring forward-reference in dune-watch.el (define-minor-mode limitation)"
 	@$(EMACSBATCH) \
 		-L . \
 		-f batch-byte-compile $(EL_FILES) 2>&1 | \
-		grep -v "reference to free variable 'flymake-" | \
 		grep -v "reference to free variable 'dune-watch-minor-mode'" | \
 		tee compile.log || true
 	@echo ""
-	@echo "Byte-compilation complete (legacy API warnings filtered)"
+	@echo "Byte-compilation complete"
 
 # Check that package can be installed
 check-install:

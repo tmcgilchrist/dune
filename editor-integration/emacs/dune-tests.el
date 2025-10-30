@@ -214,83 +214,36 @@ line3\")))
 
 ;;; Flymake Tests
 
-(ert-deftest dune-flymake-test-program-variable-defined ()
-  "Test that dune-flymake-program variable is properly defined."
+(ert-deftest dune-flymake-test-backend-function-exists ()
+  "Test that the modern flymake backend function exists."
   (require 'dune-flymake)
-  (should (boundp 'dune-flymake-program))
-  (should (stringp dune-flymake-program))
-  (should (string-match-p "dune-lint" dune-flymake-program)))
+  (should (fboundp 'dune-flymake--backend))
+  (should (fboundp 'dune-flymake-setup)))
 
-(ert-deftest dune-flymake-test-create-script-uses-correct-path ()
-  "Test that dune-flymake-create-lint-script uses dune-flymake-program.
-This is a regression test for a bug where the code incorrectly referenced
-'dune-program' (which doesn't exist) instead of 'dune-flymake-program'."
+(ert-deftest dune-flymake-test-setup-adds-backend ()
+  "Test that dune-flymake-setup adds the backend to the hook."
   (require 'dune-flymake)
-  (let* ((temp-dir (make-temp-file "dune-flymake-test" t))
-         (dune-flymake-program (expand-file-name "test-dune-lint" temp-dir)))
-    (unwind-protect
-        (progn
-          ;; Ensure the script doesn't exist yet
-          (should-not (file-exists-p dune-flymake-program))
+  (with-temp-buffer
+    (dune-mode)
+    (dune-flymake-setup)
+    (should (memq 'dune-flymake--backend flymake-diagnostic-functions))))
 
-          ;; Create the lint script
-          (dune-flymake-create-lint-script)
-
-          ;; Verify the script was created at the correct path
-          (should (file-exists-p dune-flymake-program))
-
-          ;; Verify it's executable
-          (should (file-executable-p dune-flymake-program))
-
-          ;; Verify it contains the expected shebang
-          (with-temp-buffer
-            (insert-file-contents dune-flymake-program)
-            (goto-char (point-min))
-            (should (looking-at "#!/usr/bin/env ocaml"))))
-
-      ;; Cleanup
-      (when (file-exists-p temp-dir)
-        (delete-directory temp-dir t)))))
-
-(ert-deftest dune-flymake-test-init-returns-correct-program ()
-  "Test that dune-flymake-init returns command using dune-flymake-program.
-This ensures the init function uses the correct variable throughout."
+(ert-deftest dune-flymake-test-parse-error-line ()
+  "Test parsing of dune error lines."
   (require 'dune-flymake)
-  (let* ((temp-dir (make-temp-file "dune-flymake-test" t))
-         (dune-flymake-program (expand-file-name "test-dune-lint" temp-dir))
-         (test-file (expand-file-name "dune" temp-dir)))
-    (unwind-protect
-        (progn
-          ;; Create a test dune file
-          (with-temp-file test-file
-            (insert "(library (name test))"))
+  (let ((line "File \"dune\", line 5, characters 10-20: Invalid field"))
+    (let ((parsed (dune-flymake--parse-error-line line)))
+      (should parsed)
+      (should (equal (nth 0 parsed) 5))    ; line number
+      (should (equal (nth 1 parsed) 10))   ; begin column
+      (should (equal (nth 2 parsed) 20))   ; end column
+      (should (equal (nth 3 parsed) "Invalid field"))))) ; message
 
-          ;; Visit the file in a buffer
-          (with-current-buffer (find-file-noselect test-file)
-            (dune-mode)
-
-            ;; Call init and verify it returns the correct program path
-            (let ((result (dune-flymake-init)))
-              (should (listp result))
-              (should (= (length result) 2))
-              ;; First element should be the program path
-              (should (equal (car result) dune-flymake-program))
-              ;; Second element should be the argument list
-              (should (listp (cadr result))))))
-
-      ;; Cleanup
-      (when (file-exists-p temp-dir)
-        (delete-directory temp-dir t)))))
-
-(ert-deftest dune-flymake-test-no-undefined-variable-reference ()
-  "Test that dune-flymake doesn't reference undefined 'dune-program' variable.
-This is a regression test - the old code had a bug where it referenced
-'dune-program' which was never defined, causing byte-compilation errors."
+(ert-deftest dune-flymake-test-parse-error-line-no-match ()
+  "Test that non-error lines return nil."
   (require 'dune-flymake)
-  ;; Verify dune-flymake-program exists
-  (should (boundp 'dune-flymake-program))
-  ;; Verify the buggy variable doesn't exist
-  (should-not (boundp 'dune-program)))
+  (should-not (dune-flymake--parse-error-line "This is not an error line")))
+
 
 (provide 'dune-tests)
 
