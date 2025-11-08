@@ -66,7 +66,7 @@ If not installed, attempt to install it from the GitHub repository."
       (when (yes-or-no-p "Tree-sitter grammar for dune not found. Install it? ")
         (add-to-list 'treesit-language-source-alist
                      '(dune . ("https://github.com/tmcgilchrist/tree-sitter-dune"
-                               "main"
+                               "master"
                                "src")))
         (message "Installing tree-sitter-dune grammar...")
         (condition-case err
@@ -245,15 +245,31 @@ If not installed, attempt to install it from the GitHub repository."
     :language dune
     :feature keyword
     ((stanza_name) @font-lock-keyword-face
-     (action_name) @font-lock-builtin-face)
+     (blang_op) @font-lock-keyword-face)
+
+    :language dune
+    :feature builtin
+    ((action_name) @font-lock-builtin-face)
 
     :language dune
     :feature property
     ((field_name) @font-lock-function-name-face)
 
     :language dune
+    :feature type
+    ([(module_name) (library_name) (public_name) (package_name)] @font-lock-type-face)
+
+    :language dune
+    :feature variable
+    ((named_variable) @font-lock-variable-name-face)
+
+    :language dune
     :feature constant
-    ([(boolean)] @font-lock-constant-face))
+    ([(boolean)] @font-lock-constant-face)
+
+    :language dune
+    :feature delimiter
+    (["(" ")" "[" "]"] @font-lock-bracket-face))
   "Tree-sitter font-lock settings for dune-mode.")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -261,12 +277,30 @@ If not installed, attempt to install it from the GitHub repository."
 
 (defvar dune--treesit-indent-rules
   `((dune
+     ;; Top-level: stanzas at column 0
      ((parent-is "source_file") column-0 0)
+
+     ;; Closing delimiters align with opening
      ((node-is ")") parent-bol 0)
      ((node-is "]") parent-bol 0)
-     ((parent-is "list") parent-bol 1)
+
+     ;; Stanza contents indented by 1
      ((parent-is "stanza") parent-bol 1)
+
+     ;; Field contents indented by 1 from field
      ((parent-is "field") parent-bol 1)
+
+     ;; Actions indented by 1
+     ((parent-is "action") parent-bol 1)
+
+     ;; S-expressions (generic lists) indented by 1
+     ((parent-is "sexp") parent-bol 1)
+     ((parent-is "_list") parent-bol 1)
+
+     ;; Boolean expressions
+     ((parent-is "blang") parent-bol 1)
+
+     ;; Default: indent by 1
      (no-node parent-bol 1)))
   "Tree-sitter indentation rules for dune-mode.")
 
@@ -476,8 +510,8 @@ For customization purposes, use `dune-mode-hook'."
       (treesit-parser-create 'dune)
       (setq-local treesit-font-lock-feature-list
                   '((comment string)
-                    (keyword property)
-                    (constant)))
+                    (keyword builtin property)
+                    (type variable constant delimiter)))
       (setq-local treesit-font-lock-settings
                   (apply #'treesit-font-lock-rules
                          dune--treesit-font-lock-rules))
@@ -495,6 +529,18 @@ For customization purposes, use `dune-mode-hook'."
     (smie-setup dune-smie-grammar #'dune-smie-rules)))
 
   (dune-build-menu))
+
+;;;###autoload
+(defun dune-toggle-tree-sitter ()
+  "Toggle between tree-sitter and SMIE-based dune-mode.
+This command switches the parsing backend and reloads the current buffer's mode."
+  (interactive)
+  (if (not (dune--tree-sitter-available-p))
+      (user-error "Tree-sitter is not available in this Emacs")
+    (setq dune-use-tree-sitter (not dune-use-tree-sitter))
+    (message "Tree-sitter mode %s. Reloading buffer..."
+             (if dune-use-tree-sitter "enabled" "disabled"))
+    (dune-mode)))
 
 
 ;;;###autoload

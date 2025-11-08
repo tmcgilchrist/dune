@@ -244,6 +244,161 @@ line3\")))
   (require 'dune-flymake)
   (should-not (dune-flymake--parse-error-line "This is not an error line")))
 
+;;; Tree-sitter Font-lock Tests
+
+(ert-deftest dune-treesitter-test-font-lock-rules-defined ()
+  "Test that tree-sitter font-lock rules are properly defined."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (should (boundp 'dune--treesit-font-lock-rules))
+  (should (listp dune--treesit-font-lock-rules))
+  ;; Check that the rules contain expected keywords and features
+  (let ((rules-string (format "%S" dune--treesit-font-lock-rules)))
+    (should (string-match-p ":feature comment" rules-string))
+    (should (string-match-p ":feature string" rules-string))
+    (should (string-match-p ":feature keyword" rules-string))
+    (should (string-match-p ":feature builtin" rules-string))
+    (should (string-match-p ":feature property" rules-string))
+    (should (string-match-p ":feature type" rules-string))
+    (should (string-match-p ":feature variable" rules-string))
+    (should (string-match-p ":feature constant" rules-string))
+    (should (string-match-p ":feature delimiter" rules-string))))
+
+(ert-deftest dune-treesitter-test-mode-activates-with-treesitter ()
+  "Test that dune-mode activates tree-sitter when enabled."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name foo))")
+      ;; Verify tree-sitter is active
+      (should (treesit-parser-list))
+      (should (eq (treesit-parser-language (car (treesit-parser-list))) 'dune)))))
+
+;;; Tree-sitter Indentation Tests
+
+(ert-deftest dune-treesitter-test-indent-stanza ()
+  "Test tree-sitter indentation of stanza fields."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n(name foo))")
+      (goto-char (point-min))
+      (forward-line 1)
+      (indent-for-tab-command)
+      (should (looking-back "^ " nil)))))
+
+(ert-deftest dune-treesitter-test-indent-nested-action ()
+  "Test tree-sitter indentation of nested action blocks."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(rule\n (action\n(run test)))")
+      (goto-char (point-min))
+      (search-forward "run")
+      (beginning-of-line)
+      (indent-for-tab-command)
+      ;; Action content should be indented by 1 space
+      (should (looking-back "^ " nil)))))
+
+(ert-deftest dune-treesitter-test-indent-multiple-fields ()
+  "Test tree-sitter indentation of multiple fields in a stanza."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name foo)\n(libraries bar))")
+      (goto-char (point-min))
+      (forward-line 2)
+      (indent-for-tab-command)
+      (should (looking-back "^ " nil)))))
+
+(ert-deftest dune-treesitter-test-indent-closing-paren ()
+  "Test tree-sitter indentation of closing parentheses."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name foo)\n  )")
+      (goto-char (point-min))
+      (forward-line 2)
+      (indent-for-tab-command)
+      (should (looking-at-p "^)")))))
+
+;;; Toggle Command Tests
+
+(ert-deftest dune-test-toggle-tree-sitter-function ()
+  "Test that toggle function exists."
+  (should (fboundp 'dune-toggle-tree-sitter)))
+
+(ert-deftest dune-test-toggle-tree-sitter-switches-mode ()
+  "Test that toggle switches the dune-use-tree-sitter variable."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((original-value dune-use-tree-sitter))
+    (with-temp-buffer
+      (dune-mode)
+      (dune-toggle-tree-sitter)
+      (should (not (eq dune-use-tree-sitter original-value)))
+      ;; Reset
+      (setq dune-use-tree-sitter original-value))))
+
+;;; Comparison Tests (SMIE vs Tree-sitter)
+
+(ert-deftest dune-test-smie-vs-treesitter-indent-library ()
+  "Test that SMIE and tree-sitter produce same indentation for library stanza."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((input "(library\n(name foo)\n(libraries bar baz))"))
+    ;; Test with SMIE
+    (let ((dune-use-tree-sitter nil)
+          smie-result)
+      (with-temp-buffer
+        (dune-mode)
+        (insert input)
+        (indent-region (point-min) (point-max))
+        (setq smie-result (buffer-string)))
+      ;; Test with tree-sitter
+      (let ((dune-use-tree-sitter t)
+            treesit-result)
+        (with-temp-buffer
+          (dune-mode)
+          (insert input)
+          (indent-region (point-min) (point-max))
+          (setq treesit-result (buffer-string)))
+        ;; Compare results
+        (should (string= smie-result treesit-result))))))
+
+(ert-deftest dune-test-smie-vs-treesitter-indent-rule ()
+  "Test that SMIE and tree-sitter produce same indentation for rule stanza."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((input "(rule\n(targets foo.ml)\n(deps bar.txt)\n(action (run generator)))"))
+    ;; Test with SMIE
+    (let ((dune-use-tree-sitter nil)
+          smie-result)
+      (with-temp-buffer
+        (dune-mode)
+        (insert input)
+        (indent-region (point-min) (point-max))
+        (setq smie-result (buffer-string)))
+      ;; Test with tree-sitter
+      (let ((dune-use-tree-sitter t)
+            treesit-result)
+        (with-temp-buffer
+          (dune-mode)
+          (insert input)
+          (indent-region (point-min) (point-max))
+          (setq treesit-result (buffer-string)))
+        ;; Compare results
+        (should (string= smie-result treesit-result))))))
 
 (provide 'dune-tests)
 
