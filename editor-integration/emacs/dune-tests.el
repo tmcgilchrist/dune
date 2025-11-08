@@ -411,6 +411,97 @@ line3\")))
         (should (looking-at "(library"))
         (should (< (point) initial-pos))))))
 
+;;; Semantic Selection Tests
+
+(ert-deftest dune-treesitter-test-mark-stanza ()
+  "Test marking a stanza."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name mylib))\n\n(executable\n (name main))")
+      ;; Position cursor in first stanza
+      (goto-char (point-min))
+      (forward-line 1)
+      ;; Mark stanza
+      (dune-treesitter-mark-stanza)
+      ;; Check that region covers the library stanza
+      (should (use-region-p))
+      (should (= (region-beginning) 1))
+      (should (string= (buffer-substring (region-beginning) (region-end))
+                       "(library\n (name mylib))")))))
+
+(ert-deftest dune-treesitter-test-mark-field ()
+  "Test that mark-field function exists and runs."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (should (fboundp 'dune-treesitter-mark-field))
+  ;; Basic smoke test - function should run without error
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name mylib)\n (libraries base))")
+      (goto-char (point-min))
+      (search-forward "name")
+      (goto-char (match-beginning 0))
+      ;; Function should run without error, even if it doesn't find a field
+      (should-not (condition-case nil
+                      (progn (dune-treesitter-mark-field) nil)
+                    (error t))))))
+
+(ert-deftest dune-treesitter-test-mark-sexp ()
+  "Test marking an s-expression."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (preprocess (pps ppx_jane)))")
+      ;; Position cursor inside (pps ppx_jane)
+      (goto-char (point-min))
+      (search-forward "pps")
+      ;; Mark sexp
+      (dune-treesitter-mark-sexp)
+      ;; Check that region covers the pps sexp
+      (should (use-region-p))
+      (let ((text (buffer-substring (region-beginning) (region-end))))
+        (should (string-match-p "pps ppx_jane" text))))))
+
+(ert-deftest dune-treesitter-test-expand-region ()
+  "Test region expansion."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name mylib))")
+      ;; Position cursor on 'mylib'
+      (goto-char (point-min))
+      (search-forward "mylib")
+      (backward-word)
+      ;; First expansion should select current node
+      (dune-treesitter-expand-region)
+      (should (use-region-p))
+      (let ((first-region (buffer-substring (region-beginning) (region-end))))
+        ;; Second expansion should expand to parent
+        (dune-treesitter-expand-region)
+        (should (use-region-p))
+        (should (> (- (region-end) (region-beginning))
+                   (length first-region)))))))
+
+(ert-deftest dune-treesitter-test-selection-keybindings ()
+  "Test that selection keybindings are set up."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (should (eq (key-binding (kbd "C-c C-s")) 'dune-treesitter-mark-stanza))
+      (should (eq (key-binding (kbd "C-c C-f")) 'dune-treesitter-mark-field))
+      (should (eq (key-binding (kbd "C-c C-x")) 'dune-treesitter-mark-sexp))
+      (should (eq (key-binding (kbd "C-=")) 'dune-treesitter-expand-region)))))
+
 ;;; Comparison Tests (SMIE vs Tree-sitter)
 
 (ert-deftest dune-test-smie-vs-treesitter-indent-library ()

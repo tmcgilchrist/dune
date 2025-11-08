@@ -300,6 +300,81 @@ For dune files, this returns the stanza type and its name field if present."
         stanza-type))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;                Tree-sitter semantic selection
+
+(defun dune-treesitter-mark-stanza ()
+  "Mark the current stanza."
+  (interactive)
+  (when-let* ((node (treesit-node-at (point)))
+              (stanza (treesit-parent-until
+                       node
+                       (lambda (n) (string= "stanza" (treesit-node-type n))))))
+    (goto-char (treesit-node-start stanza))
+    (set-mark (treesit-node-end stanza))
+    (activate-mark)
+    (message "Marked stanza: %s" (treesit-node-text (treesit-search-subtree stanza "stanza_name" t) t))))
+
+(defun dune-treesitter-mark-field ()
+  "Mark the current field (field name and its value)."
+  (interactive)
+  (when-let* ((node (treesit-node-at (point)))
+              (field-name (treesit-parent-until
+                           node
+                           (lambda (n) (string= "field_name" (treesit-node-type n))))))
+    ;; Find the start of the field (opening paren before field_name)
+    (let ((field-start (treesit-node-start field-name))
+          (field-end (treesit-node-end field-name)))
+      ;; Look for siblings after field_name (the values)
+      (let ((sibling (treesit-node-next-sibling field-name)))
+        (while sibling
+          (setq field-end (treesit-node-end sibling))
+          (setq sibling (treesit-node-next-sibling sibling))))
+      ;; Mark from opening paren to closing paren
+      (let ((parent (treesit-node-parent field-name)))
+        (when parent
+          (goto-char (treesit-node-start parent))
+          (set-mark (treesit-node-end parent))
+          (activate-mark)
+          (message "Marked field: %s" (treesit-node-text field-name t)))))))
+
+(defun dune-treesitter-mark-sexp ()
+  "Mark the current s-expression."
+  (interactive)
+  (when-let* ((node (treesit-node-at (point)))
+              (sexp (treesit-parent-until
+                     node
+                     (lambda (n) (or (string= "sexp" (treesit-node-type n))
+                                     (string= "_list" (treesit-node-type n))
+                                     (string= "action" (treesit-node-type n)))))))
+    (goto-char (treesit-node-start sexp))
+    (set-mark (treesit-node-end sexp))
+    (activate-mark)
+    (message "Marked %s" (treesit-node-type sexp))))
+
+(defun dune-treesitter-expand-region ()
+  "Expand the region to the next semantic unit.
+First expands to field, then to stanza, then to entire file."
+  (interactive)
+  (if (not (use-region-p))
+      ;; No region active, start by marking current node
+      (let ((node (treesit-node-at (point))))
+        (when node
+          (goto-char (treesit-node-start node))
+          (set-mark (treesit-node-end node))
+          (activate-mark)))
+    ;; Region active, expand it
+    (let* ((start (region-beginning))
+           (end (region-end))
+           (node (treesit-node-on start end))
+           (parent (when node (treesit-node-parent node))))
+      (when parent
+        (goto-char (treesit-node-start parent))
+        (set-mark (treesit-node-end parent))
+        (activate-mark)
+        (let ((type (treesit-node-type parent)))
+          (message "Expanded to %s" type))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;                Tree-sitter indentation
 
 (defvar dune--treesit-indent-rules
@@ -547,6 +622,13 @@ For customization purposes, use `dune-mode-hook'."
       ;; Setup imenu support
       (setq-local treesit-defun-type-regexp "stanza")
       (setq-local treesit-defun-name-function #'dune--treesit-defun-name)
+
+      ;; Setup tree-sitter specific keybindings
+      (when (boundp 'dune-mode-map)
+        (define-key dune-mode-map (kbd "C-c C-s") #'dune-treesitter-mark-stanza)
+        (define-key dune-mode-map (kbd "C-c C-f") #'dune-treesitter-mark-field)
+        (define-key dune-mode-map (kbd "C-c C-x") #'dune-treesitter-mark-sexp)
+        (define-key dune-mode-map (kbd "C-=") #'dune-treesitter-expand-region))
 
       (treesit-major-mode-setup)))
 
