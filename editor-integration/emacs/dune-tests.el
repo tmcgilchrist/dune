@@ -350,6 +350,67 @@ line3\")))
       ;; Reset
       (setq dune-use-tree-sitter original-value))))
 
+;;; Imenu Tests
+
+(ert-deftest dune-treesitter-test-imenu-enabled ()
+  "Test that imenu is enabled when using tree-sitter."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name mylib))\n\n(executable\n (name main))")
+      ;; Check that imenu is configured
+      (should (local-variable-p 'treesit-defun-type-regexp))
+      (should (local-variable-p 'treesit-defun-name-function)))))
+
+(ert-deftest dune-treesitter-test-defun-name-with-name-field ()
+  "Test defun name extraction for stanzas with name field."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name mylib))")
+      (goto-char (point-min))
+      (forward-line 1)
+      (let* ((node (treesit-node-at (point)))
+             (name (dune--treesit-defun-name node)))
+        (should (string-match-p "library:mylib" name))))))
+
+(ert-deftest dune-treesitter-test-defun-name-without-name-field ()
+  "Test defun name extraction for stanzas without name field."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(rule\n (targets output.txt))")
+      (goto-char (point-min))
+      (forward-line 1)
+      (let* ((node (treesit-node-at (point)))
+             (name (dune--treesit-defun-name node)))
+        (should (string= "rule" name))))))
+
+(ert-deftest dune-treesitter-test-imenu-navigation ()
+  "Test that beginning-of-defun works with tree-sitter stanzas."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name mylib))\n\n")
+      (insert "(executable\n (name main))\n\n")
+      (insert "(test\n (name test_foo))")
+      ;; Move to middle of first stanza
+      (goto-char (point-min))
+      (forward-line 1)
+      (let ((initial-pos (point)))
+        ;; beginning-of-defun should go to start of library stanza
+        (beginning-of-defun)
+        (should (looking-at "(library"))
+        (should (< (point) initial-pos))))))
+
 ;;; Comparison Tests (SMIE vs Tree-sitter)
 
 (ert-deftest dune-test-smie-vs-treesitter-indent-library ()

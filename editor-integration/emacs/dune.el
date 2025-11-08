@@ -273,6 +273,33 @@ If not installed, attempt to install it from the GitHub repository."
   "Tree-sitter font-lock settings for dune-mode.")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;                Tree-sitter imenu
+
+(defun dune--treesit-defun-name (node)
+  "Return the name of the defun NODE.
+For dune files, this returns the stanza type and its name field if present."
+  (when-let* ((stanza-node (treesit-parent-until
+                            node
+                            (lambda (n) (string= "stanza" (treesit-node-type n)))))
+              (stanza-name-node (treesit-search-subtree stanza-node "stanza_name" t)))
+    (let ((stanza-type (treesit-node-text stanza-name-node t)))
+      ;; Try to find the 'name' field to create a more descriptive entry
+      (if-let* ((fields (treesit-filter-child
+                         stanza-node
+                         (lambda (n) (string= "field_name" (treesit-node-type n)))))
+                (name-field (seq-find
+                             (lambda (field)
+                               (string= "name" (treesit-node-text field t)))
+                             fields))
+                ;; Get the value after the field_name
+                (name-value-node (treesit-node-next-sibling name-field))
+                (name-value (when name-value-node
+                              (treesit-node-text name-value-node t))))
+          (format "%s:%s" stanza-type name-value)
+        ;; No name field, just return the stanza type
+        stanza-type))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;                Tree-sitter indentation
 
 (defvar dune--treesit-indent-rules
@@ -516,6 +543,11 @@ For customization purposes, use `dune-mode-hook'."
                   (apply #'treesit-font-lock-rules
                          dune--treesit-font-lock-rules))
       (setq-local treesit-simple-indent-rules dune--treesit-indent-rules)
+
+      ;; Setup imenu support
+      (setq-local treesit-defun-type-regexp "stanza")
+      (setq-local treesit-defun-name-function #'dune--treesit-defun-name)
+
       (treesit-major-mode-setup)))
 
    ((and dune-use-tree-sitter
