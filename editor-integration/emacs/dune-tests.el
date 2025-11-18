@@ -502,6 +502,96 @@ line3\")))
       (should (eq (key-binding (kbd "C-c C-x")) 'dune-treesitter-mark-sexp))
       (should (eq (key-binding (kbd "C-=")) 'dune-treesitter-expand-region)))))
 
+;;; Error Detection Tests
+
+(ert-deftest dune-treesitter-test-flymake-backend-exists ()
+  "Test that tree-sitter flymake backend function exists."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (should (fboundp 'dune-treesitter-flymake-backend)))
+
+(ert-deftest dune-treesitter-test-missing-name-field-library ()
+  "Test detection of missing name field in library stanza."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (libraries base))")
+      ;; Collect diagnostics
+      (let ((diagnostics (dune--treesit-collect-diagnostics)))
+        ;; Should report error for missing 'name' field
+        (should (> (length diagnostics) 0))
+        (let ((messages (mapcar (lambda (d) (nth 2 d)) diagnostics)))
+          (should (seq-some (lambda (m) (string-match-p "requires a 'name' field" m))
+                            messages)))))))
+
+(ert-deftest dune-treesitter-test-missing-name-field-executable ()
+  "Test detection of missing name field in executable stanza."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(executable\n (modules main))")
+      (let ((diagnostics (dune--treesit-collect-diagnostics)))
+        (should (> (length diagnostics) 0))
+        (let ((messages (mapcar (lambda (d) (nth 2 d)) diagnostics)))
+          (should (seq-some (lambda (m) (string-match-p "requires a 'name' field" m))
+                            messages)))))))
+
+(ert-deftest dune-treesitter-test-duplicate-fields ()
+  "Test detection of duplicate field names."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name foo)\n (name bar))")
+      (let ((diagnostics (dune--treesit-collect-diagnostics)))
+        (should (> (length diagnostics) 0))
+        (let ((messages (mapcar (lambda (d) (nth 2 d)) diagnostics)))
+          (should (seq-some (lambda (m) (string-match-p "Duplicate field" m))
+                            messages)))))))
+
+(ert-deftest dune-treesitter-test-valid-stanza-no-errors ()
+  "Test that valid stanzas produce no errors."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(library\n (name mylib)\n (libraries base))")
+      (let ((diagnostics (dune--treesit-collect-diagnostics)))
+        ;; Should have no errors for valid library stanza
+        (should (= (length diagnostics) 0))))))
+
+(ert-deftest dune-treesitter-test-rule-warnings ()
+  "Test warnings for incomplete rule stanzas."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      (insert "(rule\n (targets foo.ml))")
+      (let ((diagnostics (dune--treesit-collect-diagnostics)))
+        ;; Should warn about missing 'action'
+        (should (> (length diagnostics) 0))
+        (let ((messages (mapcar (lambda (d) (nth 2 d)) diagnostics)))
+          (should (seq-some (lambda (m) (string-match-p "action" m))
+                            messages)))))))
+
+(ert-deftest dune-treesitter-test-flymake-integration ()
+  "Test that flymake backend is added when tree-sitter is enabled."
+  (skip-unless (and (fboundp 'treesit-available-p) (treesit-available-p)
+                    (treesit-language-available-p 'dune)))
+  (let ((dune-use-tree-sitter t))
+    (with-temp-buffer
+      (dune-mode)
+      ;; Flymake backend should be registered
+      (should (memq 'dune-treesitter-flymake-backend
+                    flymake-diagnostic-functions)))))
+
 ;;; Comparison Tests (SMIE vs Tree-sitter)
 
 (ert-deftest dune-test-smie-vs-treesitter-indent-library ()

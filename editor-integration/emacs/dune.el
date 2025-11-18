@@ -58,23 +58,86 @@ approach. Requires Emacs 29+ with tree-sitter support."
   (and (fboundp 'treesit-available-p)
        (treesit-available-p)))
 
+;; Tree-sitter grammar installation
+;;
+;; BRANCHING STRATEGY AND ABI COMPATIBILITY:
+;;
+;; Tree-sitter ABI support depends on which tree-sitter library version
+;; Emacs was built against, NOT the Emacs version number:
+;;
+;; - tree-sitter 0.20.x - 0.24.x: supports ABI 13-14
+;; - tree-sitter 0.25.x: supports ABI 13-15
+;;
+;; Both Emacs 29.x and 30.x can support different ABI ranges depending on
+;; their build configuration. For maximum compatibility, we use ABI 14:
+;;
+;; - Works with all tested Emacs 29.x builds
+;; - Works with all tested Emacs 30.x builds (even those built with 0.25.x)
+;; - More portable than ABI 15 (which requires 0.25.x)
+;;
+;; BRANCH USAGE:
+;; - `emacs-29` branch: Grammars regenerated with --abi=14 for compatibility
+;; - `master` branch: May use ABI 15 (future, when universally supported)
+
+;; TODO: Update this URL to point to official repository once available
+;; Currently using tmcgilchrist's repo with emacs-29 branch for ABI 14
+(defvar dune-treesitter-grammar
+  '(dune "https://github.com/tmcgilchrist/tree-sitter-dune" "emacs-29" "src")
+  "Tree-sitter grammar specification for dune.
+Format: (LANGUAGE REPO-URL REVISION SOURCE-DIR)
+See above commentary for details on ABI compatibility strategy.")
+
+(defun dune-treesitter--install-grammar-noninteractive ()
+  "Install tree-sitter-dune grammar without prompting.
+Used internally by dune-mode that has already prompted the user."
+  (unless (version<= "29.1" emacs-version)
+    (user-error "Tree-sitter requires Emacs 29.1 or later"))
+
+  ;; Add our grammar to the source list
+  (unless (assq 'dune treesit-language-source-alist)
+    (push dune-treesitter-grammar treesit-language-source-alist))
+
+  ;; Install if missing
+  (unless (treesit-language-available-p 'dune)
+    (message "Installing tree-sitter-dune...")
+    (treesit-install-language-grammar 'dune)))
+
+;;;###autoload
+(defun dune-treesitter-install-grammar ()
+  "Install tree-sitter grammar for dune.
+Checks if the grammar is available and offers to install if missing."
+  (interactive)
+  (unless (version<= "29.1" emacs-version)
+    (user-error "Tree-sitter requires Emacs 29.1 or later"))
+
+  ;; Add our grammar to the source list
+  (unless (assq 'dune treesit-language-source-alist)
+    (push dune-treesitter-grammar treesit-language-source-alist))
+
+  ;; Check if installed
+  (if (treesit-language-available-p 'dune)
+      (message "Tree-sitter-dune grammar is already installed!")
+    (when (yes-or-no-p "Tree-sitter grammar for dune not found. Install it? ")
+      (message "Installing tree-sitter-dune...")
+      (condition-case err
+          (progn
+            (treesit-install-language-grammar 'dune)
+            (message "Tree-sitter-dune grammar installed successfully!"))
+        (error
+         (message "Failed to install tree-sitter-dune: %s" err))))))
+
 (defun dune--ensure-tree-sitter-grammar ()
   "Ensure tree-sitter-dune grammar is installed.
-If not installed, attempt to install it from the GitHub repository."
+If not installed, prompt user and install it from the GitHub repository."
   (when (dune--tree-sitter-available-p)
-    (unless (treesit-language-available-p 'dune)
-      (when (yes-or-no-p "Tree-sitter grammar for dune not found. Install it? ")
-        (add-to-list 'treesit-language-source-alist
-                     '(dune . ("https://github.com/tmcgilchrist/tree-sitter-dune"
-                               "master"
-                               "src")))
-        (message "Installing tree-sitter-dune grammar...")
-        (condition-case err
-            (progn
-              (treesit-install-language-grammar 'dune)
-              (message "Tree-sitter-dune grammar installed successfully"))
-          (error
-           (message "Failed to install tree-sitter-dune: %s" err)))))))
+    (unless (treesit-ready-p 'dune)
+      (if (yes-or-no-p "Tree-sitter grammar for dune not found. Install it now? ")
+          (progn
+            (dune-treesitter--install-grammar-noninteractive)
+            ;; Re-check after installation
+            (unless (treesit-ready-p 'dune)
+              (error "Failed to install tree-sitter grammar for dune")))
+        (error "Tree-sitter for dune isn't available. Run M-x dune-treesitter-install-grammar")))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;               Syntax highlighting of dune files
@@ -375,6 +438,135 @@ First expands to field, then to stanza, then to entire file."
           (message "Expanded to %s" type))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;                Tree-sitter error detection
+
+(defun dune--treesit-find-errors (node)
+  "Find ERROR nodes in the parse tree rooted at NODE.
+Returns a list of (START END MESSAGE) tuples."
+  (let ((errors '()))
+    (when (string= "ERROR" (treesit-node-type node))
+      (push (list (treesit-node-start node)
+                  (treesit-node-end node)
+                  "Syntax error: invalid or incomplete syntax")
+            errors))
+    ;; Recursively check children
+    (let ((child (treesit-node-child node 0))
+          (index 0))
+      (while child
+        (setq errors (append errors (dune--treesit-find-errors child)))
+        (setq index (1+ index))
+        (setq child (treesit-node-child node index))))
+    errors))
+
+(defun dune--treesit-validate-stanza (stanza-node)
+  "Validate STANZA-NODE and return list of errors.
+Returns list of (START END MESSAGE SEVERITY) tuples."
+  (let ((errors '())
+        (stanza-name-node (treesit-search-subtree stanza-node "stanza_name" t)))
+    (when stanza-name-node
+      (let ((stanza-type (treesit-node-text stanza-name-node t))
+            (fields (treesit-filter-child
+                     stanza-node
+                     (lambda (n) (string= "field_name" (treesit-node-type n))))))
+
+        (cond
+         ;; library stanza must have 'name' field
+         ((string= stanza-type "library")
+          (unless (seq-find (lambda (f) (string= "name" (treesit-node-text f t))) fields)
+            (push (list (treesit-node-start stanza-node)
+                        (treesit-node-end stanza-name-node)
+                        "library stanza requires a 'name' field"
+                        :error)
+                  errors)))
+
+         ;; executable stanza must have 'name' field
+         ((string= stanza-type "executable")
+          (unless (seq-find (lambda (f) (string= "name" (treesit-node-text f t))) fields)
+            (push (list (treesit-node-start stanza-node)
+                        (treesit-node-end stanza-name-node)
+                        "executable stanza requires a 'name' field"
+                        :error)
+                  errors)))
+
+         ;; rule stanza should have targets and action
+         ((string= stanza-type "rule")
+          (unless (seq-find (lambda (f) (string= "targets" (treesit-node-text f t))) fields)
+            (push (list (treesit-node-start stanza-node)
+                        (treesit-node-end stanza-name-node)
+                        "rule stanza should have 'targets' field"
+                        :warning)
+                  errors))
+          (unless (seq-find (lambda (f) (string= "action" (treesit-node-text f t))) fields)
+            (push (list (treesit-node-start stanza-node)
+                        (treesit-node-end stanza-name-node)
+                        "rule stanza should have 'action' field"
+                        :warning)
+                  errors))))
+
+        ;; Check for duplicate field names
+        (let ((field-names (mapcar (lambda (f) (treesit-node-text f t)) fields))
+              (seen '()))
+          (dolist (field-name field-names)
+            (when (member field-name seen)
+              (let ((dup-node (seq-find (lambda (f) (string= field-name (treesit-node-text f t))) fields)))
+                (push (list (treesit-node-start dup-node)
+                            (treesit-node-end dup-node)
+                            (format "Duplicate field '%s'" field-name)
+                            :warning)
+                      errors)))
+            (push field-name seen)))))
+    errors))
+
+(defun dune--treesit-collect-diagnostics ()
+  "Collect all tree-sitter diagnostics for the current buffer.
+Returns list of (START END MESSAGE SEVERITY) tuples."
+  (when-let ((parser (car (treesit-parser-list)))
+             (root (treesit-parser-root-node parser)))
+    (let ((diagnostics '()))
+
+      ;; Find parse errors (ERROR nodes)
+      (let ((parse-errors (dune--treesit-find-errors root)))
+        (dolist (err parse-errors)
+          (push (list (nth 0 err) (nth 1 err) (nth 2 err) :error) diagnostics)))
+
+      ;; Validate each stanza
+      (let ((stanzas (treesit-filter-child
+                      root
+                      (lambda (n) (string= "stanza" (treesit-node-type n))))))
+        (dolist (stanza stanzas)
+          (setq diagnostics (append diagnostics (dune--treesit-validate-stanza stanza)))))
+
+      diagnostics)))
+
+(defun dune-treesitter-flymake-backend (report-fn &rest _args)
+  "Flymake backend using tree-sitter for syntax checking.
+REPORT-FN is the callback to report diagnostics."
+  (if (not (and (dune--tree-sitter-available-p)
+                dune-use-tree-sitter
+                (treesit-parser-list)))
+      ;; No tree-sitter available or not enabled
+      (funcall report-fn nil)
+    ;; Collect diagnostics
+    (let* ((source-buffer (current-buffer))
+           (diagnostics-data (dune--treesit-collect-diagnostics))
+           (flymake-diagnostics '()))
+
+      (dolist (diag diagnostics-data)
+        (let ((start (nth 0 diag))
+              (end (nth 1 diag))
+              (message (nth 2 diag))
+              (severity (nth 3 diag)))
+          (push (flymake-make-diagnostic
+                 source-buffer
+                 start
+                 end
+                 severity
+                 message)
+                flymake-diagnostics)))
+
+      (funcall report-fn (nreverse flymake-diagnostics)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;                Tree-sitter indentation
 
 (defvar dune--treesit-indent-rules
@@ -606,8 +798,12 @@ For customization purposes, use `dune-mode-hook'."
 
   (cond
    ((and dune-use-tree-sitter
-         (dune--tree-sitter-available-p)
-         (treesit-language-available-p 'dune))
+         (dune--tree-sitter-available-p))
+    ;; Tree-sitter is enabled and available
+    ;; First, ensure the grammar is installed
+    (dune--ensure-tree-sitter-grammar)
+
+    ;; Now set up tree-sitter mode
     (when (treesit-ready-p 'dune)
       (treesit-parser-create 'dune)
       (setq-local treesit-font-lock-feature-list
@@ -630,15 +826,13 @@ For customization purposes, use `dune-mode-hook'."
         (define-key dune-mode-map (kbd "C-c C-x") #'dune-treesitter-mark-sexp)
         (define-key dune-mode-map (kbd "C-=") #'dune-treesitter-expand-region))
 
+      ;; Setup tree-sitter flymake backend
+      (add-hook 'flymake-diagnostic-functions #'dune-treesitter-flymake-backend nil t)
+
       (treesit-major-mode-setup)))
 
-   ((and dune-use-tree-sitter
-         (dune--tree-sitter-available-p))
-    (dune--ensure-tree-sitter-grammar)
-    (set (make-local-variable 'font-lock-defaults) '(dune-font-lock-keywords))
-    (smie-setup dune-smie-grammar #'dune-smie-rules))
-
    (t
+    ;; Fallback to traditional SMIE-based mode
     (set (make-local-variable 'font-lock-defaults) '(dune-font-lock-keywords))
     (smie-setup dune-smie-grammar #'dune-smie-rules)))
 
